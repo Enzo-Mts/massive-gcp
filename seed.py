@@ -73,7 +73,7 @@ def create_posts(client: datastore.Client, names: list[str], total_posts: int, d
         return 0
     created = 0
     # Répartition simple: choix aléatoire d'auteur pour chaque post
-    base_time = datetime.utcnow()
+    base_time = datetime.now(datetime.UTC)
     for i in range(total_posts):
         author = random.choice(names)
         key = client.key('Post')
