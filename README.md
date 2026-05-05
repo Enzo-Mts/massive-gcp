@@ -58,9 +58,7 @@ Chaque mesure est répétée 3 fois (60s par run).
 |-------|---------|---------|---------|----------|-----------------|
 | 20    | 392ms   | 124ms   | 95ms    | 204ms    | 22              |
 | 40    | 8165ms  | 2841ms  | 1780ms  | 4262ms   | 23              |
-| 60    | 9588ms  | 3803ms  | 2431ms  | 5274ms   | ~0*             |
-
-*\*Le nombre d'instances n'a pas pu être relevé correctement pour le niveau 60.*
+| 60    | 9588ms  | 3803ms  | 2431ms  | 5274ms   | 20              |
 
 ### Graphique
 
