@@ -1,0 +1,4 @@
+Method,Name,Error,Occurrences
+GET,/api/timeline,"gaierror(-2, 'Name or service not known')",5
+GET,/api/timeline,"gaierror(-3, 'Temporary failure in name resolution')",1
+GET,/api/timeline,"ConnectionRefusedError(111, 'Connection refused')",5
