@@ -44,7 +44,7 @@ Chaque niveau est répété 3 fois. **Chaque utilisateur simulé effectue exacte
 | 100 | 2 914 | 7 | 4 |
 | 1 000 | 5 755 | 13.3 | 9–11 |
 
-![Concurrence](out/conc.png)
+![Concurrence](conc.png)
 
 ### Interprétation
 
@@ -76,7 +76,7 @@ Chaque niveau est répété 3 fois. Le nombre d'instances est stable à 4 sur to
 | 40 | 6 976 | 6.3 | 4 |
 | 60 | 10 124 | 6.3 | 4 |
 
-![Fanout](out/fanout.png)
+![Fanout](fanout.png)
 
 ### Interprétation
 
