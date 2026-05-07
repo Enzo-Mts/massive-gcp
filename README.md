@@ -17,11 +17,39 @@ Ce projet évalue le passage à l'échelle de **TinyInsta**, un réseau social m
 
 ### Isolation entre les runs
 
-Afin de garantir des mesures fiables, une fonction `kill_all_instances()` est appelée au début de chaque run. Elle supprime toutes les instances App Engine actives via `gcloud app instances delete`, puis boucle toutes les 5 secondes jusqu'à ce que le compteur d'instances tombe à 0 ou 1. Le nombre d'instances actives est affiché juste avant le lancement du test. Les pauses fixes entre les runs ont été supprimées — c'est le polling qui garantit l'état propre.
+Afin de garantir des mesures fiables, toutes les instances App Engine sont supprimées entre chaque run et chaque niveau de test via la fonction `kill_all_instances()` :
+
+```bash
+# Supprime toutes les instances App Engine et attend qu'elles soient bien down
+kill_all_instances() {
+    echo "    [cleanup] Suppression de toutes les instances App Engine..."
+    gcloud app instances list --format="value(service,version,id)" 2>/dev/null | \
+        while IFS=$'\t' read -r service version id; do
+            gcloud app instances delete "$id" \
+                --service="$service" \
+                --version="$version" \
+                --quiet 2>/dev/null || true
+        done
+
+    # Attendre que les instances descendent à 0 ou 1
+    echo "    [cleanup] Attente descente à 0 ou 1 instance..."
+    while true; do
+        REMAINING=$(count_instances)
+        echo "    [$(date +%H:%M:%S)] instances restantes: $REMAINING"
+        [ "$REMAINING" -le 1 ] && break
+        sleep 5
+    done
+    echo "    [cleanup] OK — $REMAINING instance(s) active(s), lancement du test."
+}
+```
+
+Cette fonction supprime toutes les instances actives via `gcloud app instances delete`, puis boucle toutes les 5 secondes jusqu'à ce que le compteur tombe à 0 ou 1. Le nombre d'instances actives est affiché juste avant le lancement du test. Les pauses fixes entre les runs ont été supprimées — c'est le polling qui garantit l'état propre.
 
 ### Comportement des utilisateurs simulés
 
 Chaque utilisateur Locust effectue **exactement une requête** `/api/timeline` sur un utilisateur aléatoire, puis s'arrête (`raise StopUser()`). Le run se termine automatiquement quand tous les utilisateurs ont reçu leur réponse (succès ou erreur). Le paramètre `--run-time 60s` reste configuré comme timeout de sécurité maximum.
+
+**Conséquence importante** : tous les utilisateurs simulés lancent leur requête dès qu'ils arrivent, ce qui crée un **burst instantané**. L'autoscaler d'App Engine, qui prend ses décisions sur des métriques moyennées avec un délai de réaction de l'ordre de 30 à 60 secondes, n'a pas le temps (ou très peu) de provisionner de nouvelles instances avant que le test soit terminé. Les résultats reflètent donc la capacité du système à encaisser un pic soudain, et non sa capacité à scaler progressivement sous une charge soutenue. C'est également la cause principale du nombre d'erreurs relativement élevé observé dans les résultats.
 
 ### Format des résultats
 
@@ -56,11 +84,11 @@ Dès 10 utilisateurs simultanés, le temps moyen bondit à **~4,6 secondes** alo
 
 À 50 utilisateurs, on observe 3 à 4 instances actives et un temps moyen remonté à **~5 secondes**. Les erreurs augmentent nettement (5 à 10 par run). L'autoscaler scale, mais pas assez vite pour absorber le burst initial de 50 requêtes simultanées.
 
-Le palier à **100 utilisateurs** est intéressant : avec 4 instances stables, le temps moyen retombe à **~2,9 secondes** — mieux que pour 50 utilisateurs. L'explication probable est que l'infrastructure dispose déjà de 4 instances actives (héritées du nettoyage précédent ou démarrées rapidement), ce qui permet de distribuer la charge efficacement. Les erreurs restent contenues autour de 7.
+Le palier à **100 utilisateurs** présente un résultat contre-intuitif : avec 4 instances stables, le temps moyen retombe à **~2,9 secondes** — mieux que pour 20 et 50 utilisateurs. Cela illustre bien le caractère non-déterministe du démarrage des instances : dans ce cas précis, les 4 instances étaient probablement disponibles plus rapidement, ce qui a permis de distribuer la charge efficacement dès le début du burst. On observe d'ailleurs ce phénomène à d'autres niveaux — certaines fois, les instances démarrent plus vite que d'autres, ce qui produit une variance importante entre les runs.
 
-À **1 000 utilisateurs**, l'autoscaler déploie jusqu'à 11 instances. Le temps moyen se stabilise autour de **5,7 secondes** avec une variance faible entre les runs (5 643 à 5 874 ms), ce qui montre que le système atteint un régime stable. Les erreurs montent à 13–14 par run, soit environ 1,3 % du total — un taux acceptable sous cette charge extrême.
+À **1 000 utilisateurs**, l'autoscaler déploie jusqu'à 11 instances. Le temps moyen se stabilise autour de **5,7 secondes** avec une variance faible entre les runs (5 643 à 5 874 ms). Les erreurs montent à 13–14 par run, soit environ 1,3 % du total.
 
-**En résumé** : le temps de réponse ne croît pas linéairement avec le nombre d'utilisateurs. On passe de 1,5 s (1 user) à 5,7 s (1 000 users), soit un facteur ~4× pour une charge multipliée par 1 000×. L'autoscaler d'App Engine fait son travail en ajoutant des instances, mais avec un temps de réaction qui introduit de la variance et des erreurs transitoires, surtout sur les petites charges (10–50 users) où le scaling n'est pas encore enclenché.
+**En résumé** : ces résultats sont étonnants et ne reflètent pas fidèlement la capacité de scaling du système. Comme tous les utilisateurs envoient leur unique requête en même temps, le test mesure la résistance à un **burst instantané** et non le comportement sous charge soutenue. L'autoscaler n'a pas le temps de réagir avant que les requêtes soient déjà servies ou en erreur, ce qui explique à la fois le nombre d'erreurs élevé et les résultats non-monotones (100 users plus rapide que 50 users). Malgré cela, le système passe de 1,5 s (1 user) à 5,7 s (1 000 users), soit un facteur ~4× pour une charge multipliée par 1 000× — ce qui montre que l'autoscaler parvient tout de même à absorber une partie significative de la montée en charge, même dans ces conditions défavorables.
 
 ---
 
@@ -68,7 +96,7 @@ Le palier à **100 utilisateurs** est intéressant : avec 4 instances stables, l
 
 **Paramètres fixes** : 1000 utilisateurs en base, 100 posts/utilisateur, 50 utilisateurs simultanés.
 **Variable** : nombre de followees par utilisateur (20, 40, 60).
-Chaque niveau est répété 3 fois. Le nombre d'instances est stable à 4 sur tous les runs.
+Chaque niveau est répété 3 fois. Le nombre d'instances n'est pas fixé — il est laissé libre à l'autoscaler.
 
 | Followees | Temps moyen (ms) | Erreurs moyennes | Instances |
 |:-:|:-:|:-:|:-:|
@@ -80,11 +108,11 @@ Chaque niveau est répété 3 fois. Le nombre d'instances est stable à 4 sur to
 
 ### Interprétation
 
-L'infrastructure est ici constante (4 instances sur tous les runs), ce qui permet d'isoler l'impact du fan-out sur les performances.
+Bien que le nombre d'instances ne soit pas fixé, l'autoscaler a provisionné systématiquement 4 instances sur tous les runs. La charge concurrente étant constante (50 utilisateurs), cela permet d'isoler l'impact du fan-out sur les performances.
 
 Avec 20 followees, le temps moyen est de **~3 secondes**. Avec 40 followees, il double à **~7 secondes**. Avec 60 followees, il atteint **~10 secondes**. La relation est quasi-linéaire : chaque tranche de 20 followees supplémentaires ajoute environ 3,5 secondes au temps de réponse. C'est cohérent avec l'architecture de la timeline qui doit récupérer les posts de chaque followee individuellement — doubler le nombre de followees double mécaniquement le travail à effectuer.
 
-La variance entre les runs diminue avec le fan-out : à 60 followees, l'écart entre le run le plus lent (12 150 ms) et le plus rapide (8 313 ms) est plus important en valeur absolue mais reste dans un rapport similaire. Le nombre d'erreurs reste stable autour de 6–7 par run quel que soit le fan-out, ce qui confirme que les erreurs sont davantage liées à la charge concurrente (50 utilisateurs simultanés) qu'à la taille des données à récupérer.
+La variance entre les runs est plus marquée à 60 followees, avec un écart entre le run le plus lent (12 150 ms) et le plus rapide (8 313 ms). Le nombre d'erreurs reste stable autour de 6–7 par run quel que soit le fan-out, ce qui confirme que les erreurs sont davantage liées à la charge concurrente (50 utilisateurs simultanés en burst) qu'à la taille des données à récupérer.
 
 **En résumé** : le temps de réponse croît linéairement avec le nombre de followees. La requête timeline ne bénéficie d'aucune optimisation type batch ou cache — elle scale en O(n) avec le fan-out.
 
@@ -94,6 +122,14 @@ La variance entre les runs diminue avec le fan-out : à 60 followees, l'écart e
 
 **Oui, mais avec des nuances.**
 
-Sur l'axe de la **concurrence**, App Engine scale correctement grâce à l'autoscaler : le temps de réponse ne croît que d'un facteur ~4× quand la charge est multipliée par 1 000×. Le système absorbe la montée en charge en ajoutant des instances, ce qui maintient une latence raisonnable. Les principales limites sont le délai de réaction de l'autoscaler (qui cause des erreurs transitoires sur les bursts) et le cold start des nouvelles instances.
+Sur l'axe de la **concurrence**, nos résultats sont à interpréter avec prudence : le protocole de test (une requête par utilisateur, envoyée immédiatement) crée un burst instantané qui ne laisse pas le temps à l'autoscaler de réagir pleinement. Les résultats non-monotones et le taux d'erreurs élevé en témoignent. Malgré ces conditions défavorables, App Engine parvient à contenir la dégradation : le temps de réponse ne croît que d'un facteur ~4× quand la charge est multipliée par 1 000×, grâce à l'ajout progressif d'instances. Sous une charge plus réaliste et soutenue, l'autoscaler aurait davantage de temps pour provisionner et les performances seraient vraisemblablement meilleures.
 
 Sur l'axe du **fan-out**, la requête timeline scale en O(n) — ce qui est attendu pour une architecture sans dénormalisation. C'est le point faible principal : avec 60 followees la timeline met déjà 10 secondes à se construire. Pour aller au-delà, il faudrait implémenter des optimisations côté données (dénormalisation de la timeline, cache, requêtes batch sur le Datastore).
+
+---
+
+## Outils utilisés
+
+- [Locust](https://locust.io/) — Injection de charge
+- [Matplotlib](https://matplotlib.org/) — Visualisation
+- Google App Engine + Datastore
