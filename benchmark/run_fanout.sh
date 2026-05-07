@@ -19,10 +19,44 @@ CONCURRENT=50
 SPAWN_RATE=50
 
 # Variable : nombre de followees
-FOLLOW_LEVELS=(20 40 60)
+FOLLOW_LEVELS=(60)
 RUNS=3
 
 mkdir -p "$OUTDIR"
+
+count_instances() {
+    gcloud app instances list --format="value(id)" 2>/dev/null | wc -l | tr -d ' '
+}
+
+kill_all_instances() {
+    echo "    [cleanup] Suppression de toutes les instances App Engine..."
+    gcloud app instances list --format="value(service,version,id)" 2>/dev/null | \
+        while IFS=$'\t' read -r service version id; do
+            gcloud app instances delete "$id" \
+                --service="$service" \
+                --version="$version" \
+                --quiet 2>/dev/null || true
+        done
+
+    # Attendre que toutes les instances soient down
+    echo "    [cleanup] Attente de la descente à 0 instance..."
+    while true; do
+        REMAINING=$(count_instances)
+        echo "    [$(date +%H:%M:%S)] instances restantes: $REMAINING"
+        [ "$REMAINING" -eq 0 ] && break
+        sleep 5
+    done
+
+    # Si on est tombé à 0, attendre qu'au moins 1 instance redémarre
+    echo "    [cleanup] 0 instance — attente du redémarrage d'au moins 1..."
+    while true; do
+        REMAINING=$(count_instances)
+        echo "    [$(date +%H:%M:%S)] instances actives: $REMAINING"
+        [ "$REMAINING" -ge 1 ] && break
+        sleep 5
+    done
+    echo "    [cleanup] OK — $REMAINING instance(s) prête(s), lancement du test."
+}
 
 seed_for_follows() {
     local follows=$1
@@ -65,6 +99,9 @@ for follows in "${FOLLOW_LEVELS[@]}"; do
         echo ">>> FOLLOWS=$follows, RUN=$run/$RUNS"
         echo "    $(date)"
 
+        # Tuer toutes les instances pour un test propre
+        kill_all_instances
+
         # Lancer locust en arrière-plan
         locust -f "$LOCUSTFILE" \
             --host "$HOST" \
@@ -93,8 +130,6 @@ for follows in "${FOLLOW_LEVELS[@]}"; do
         # Sauvegarder le max d'instances observé pour ce run
         echo "$MAX_INSTANCES" > "$OUTDIR/fanout_${follows}_run${run}_instances.txt"
         echo "    Max instances observées: $MAX_INSTANCES"
-        echo "    Pause 10s..."
-        sleep 10
     done
 done
 

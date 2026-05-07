@@ -24,6 +24,28 @@ count_instances() {
     gcloud app instances list --format="value(id)" 2>/dev/null | wc -l | tr -d ' '
 }
 
+# Supprime toutes les instances App Engine et attend qu'elles soient bien down
+kill_all_instances() {
+    echo "    [cleanup] Suppression de toutes les instances App Engine..."
+    gcloud app instances list --format="value(service,version,id)" 2>/dev/null | \
+        while IFS=$'\t' read -r service version id; do
+            gcloud app instances delete "$id" \
+                --service="$service" \
+                --version="$version" \
+                --quiet 2>/dev/null || true
+        done
+
+    # Attendre que les instances descendent à 0 ou 1
+    echo "    [cleanup] Attente descente à 0 ou 1 instance..."
+    while true; do
+        REMAINING=$(count_instances)
+        echo "    [$(date +%H:%M:%S)] instances restantes: $REMAINING"
+        [ "$REMAINING" -le 1 ] && break
+        sleep 5
+    done
+    echo "    [cleanup] OK — $REMAINING instance(s) active(s), lancement du test."
+}
+
 echo "============================================"
 echo " Expérience Concurrence — TinyInsta"
 echo " Niveaux: ${LEVELS[*]}"
@@ -36,10 +58,10 @@ echo "============================================"
 #echo "[init] Nettoyage + seed initial..."
 #python3 "$CLEAR_SCRIPT" --yes
 #python3 "$SEED_SCRIPT" \
- #   --users "$SEED_USERS" \
-  #  --posts "$SEED_POSTS" \
-   # --follows-min "$SEED_FOLLOWS" \
-    #--follows-max "$SEED_FOLLOWS"
+ #  --users "$SEED_USERS" \
+  # --posts "$SEED_POSTS" \
+   #--follows-min "$SEED_FOLLOWS" \
+   #--follows-max "$SEED_FOLLOWS"
 #echo "[init] Pause 15s pour que Datastore se stabilise..."
 sleep 15
 
@@ -50,6 +72,10 @@ for level in "${LEVELS[@]}"; do
         echo ""
         echo ">>> PARAM=$level, RUN=$run/$RUNS (spawn_rate=$rate)"
         echo "    $(date)"
+
+        # Tuer toutes les instances pour un test propre
+        kill_all_instances
+        echo "    [start] Instances actives avant le test: $(count_instances)"
 
         # Lancer locust en arrière-plan
         locust -f "$LOCUSTFILE" \
@@ -79,14 +105,7 @@ for level in "${LEVELS[@]}"; do
         # Sauvegarder le max d'instances observé pour ce run
         echo "$MAX_INSTANCES" > "$OUTDIR/conc_${level}_run${run}_instances.txt"
         echo "    Max instances observées: $MAX_INSTANCES"
-        echo "    Pause 10s..."
-        sleep 120
     done
-
-    # Attendre que App Engine redescende avant le niveau suivant
-    echo ""
-    echo "    [cooldown] Pause 2 min pour laisser App Engine scale down..."
-    sleep 120
 done
 
 echo ""

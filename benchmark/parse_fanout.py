@@ -27,9 +27,8 @@ def parse_locust_stats(filepath: str) -> dict | None:
                 total = int(row.get("Request Count", 0))
                 return {
                     "avg_time": round(avg),
-                    "failed": 1 if failures > 0 else 0,
-                    "total_requests": total,
-                    "failure_count": failures
+                    "failed": failures,
+                    "total_requests": total
                 }
     return None
 
@@ -66,16 +65,17 @@ def main():
                     "AVG_TIME": f"{stats['avg_time']}ms",
                     "RUN": run,
                     "FAILED": stats["failed"],
-                    "NB_INSTANCES": nb_instances
+                    "Nb instances": nb_instances
                 })
-                print(f"  {filename} -> PARAM={param}, RUN={run}, AVG={stats['avg_time']}ms, FAILED={stats['failed']}")
+                print(f"  {filename} -> PARAM={param}, RUN={run}, AVG={stats['avg_time']}ms, "
+                      f"FAILED={stats['failed']}, INSTANCES={nb_instances}")
 
     # Trier par PARAM puis par RUN
     results.sort(key=lambda r: (r["PARAM"], r["RUN"]))
 
     csv_path = os.path.join(outdir, "fanout.csv")
     with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["PARAM", "AVG_TIME", "RUN", "FAILED", "NB_INSTANCES"])
+        writer = csv.DictWriter(f, fieldnames=["PARAM", "AVG_TIME", "RUN", "FAILED", "Nb instances"])
         writer.writeheader()
         writer.writerows(results)
 
